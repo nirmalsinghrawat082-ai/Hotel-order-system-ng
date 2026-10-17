@@ -1,0 +1,314 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hotel Order System</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:Arial,sans-serif;background:#f3f4f6;color:#222}
+header{background:#7c1d1d;color:white;padding:16px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+main{max-width:1100px;margin:auto;padding:16px}
+.card{background:white;border-radius:12px;padding:16px;margin:12px 0;box-shadow:0 2px 8px #0001}
+input,select,textarea,button{font:inherit;padding:11px;border:1px solid #ccc;border-radius:7px;margin:4px 0;max-width:100%}
+button{background:#7c1d1d;color:white;border:0;cursor:pointer}
+button.secondary{background:#555}
+button.danger{background:#b91c1c}
+input,select,textarea{width:100%}
+.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+.tables{display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:8px}
+.tablebtn{background:#166534;padding:16px 5px}
+.item{display:flex;align-items:center;justify-content:space-between;gap:8px;border-bottom:1px solid #eee;padding:10px 0}
+.item button{padding:7px 12px}
+.hidden{display:none!important}
+.muted{color:#666;font-size:14px}
+h2{margin-top:0}
+#message{color:#b91c1c;font-weight:bold}
+@media print{
+body{background:white}
+header,.no-print,#app{display:none!important}
+#printArea{display:block!important}
+}
+</style>
+</head>
+<body>
+<header>
+<strong id="hotelTitle">Hotel Order System</strong>
+<span id="topInfo">Captain Order & Billing</span>
+</header>
+
+<main>
+<section id="login" class="card">
+<h2>Hotel Login</h2>
+<p class="muted">Enter your hotel system password.</p>
+<form id="loginForm">
+<input id="password" type="password" placeholder="Enter password" required>
+<button type="submit">Login</button>
+</form>
+<p id="loginMessage"></p>
+</section>
+
+<section id="app" class="hidden">
+<div class="card">
+<h2>New Order</h2>
+<div class="row">
+<div>
+<label>Table</label>
+<select id="tableSelect"></select>
+</div>
+<div>
+<label>Customer Name (optional)</label>
+<input id="customer" placeholder="Customer name">
+</div>
+</div>
+<div id="menuList"></div>
+<label>Order Note</label>
+<textarea id="note" placeholder="Special instructions"></textarea>
+<h3>Order Total: ₹<span id="total">0</span></h3>
+<button id="placeOrder">Place Order</button>
+<p id="message"></p>
+</div>
+
+<div class="card">
+<h2>Orders & Billing</h2>
+<button class="secondary" id="refresh">Refresh Orders</button>
+<div id="orders"></div>
+</div>
+
+<div class="card">
+<h2>Table Management</h2>
+<p class="muted">Rename a table or activate/deactivate it.</p>
+<div id="tableManagement"></div>
+</div>
+
+<div class="card">
+<h2>Menu Management</h2>
+<div class="row">
+<input id="newName" placeholder="Item name">
+<input id="newPrice" type="number" min="0" placeholder="Price ₹">
+<input id="newCategory" placeholder="Category">
+</div>
+<button id="addMenu">Add Menu Item</button>
+<div id="menuManagement"></div>
+</div>
+</section>
+</main>
+
+<div id="printArea" style="display:none"></div>
+
+<script>
+const $=id=>document.getElementById(id);
+let data={tables:[],menu:[],orders:[]};
+let cart={};
+
+async function api(url,options={}){
+ const response=await fetch(url,{
+  credentials:'same-origin',
+  headers:{'Content-Type':'application/json'},
+  ...options
+ });
+ const result=await response.json().catch(()=>({}));
+ if(!response.ok)throw Error(result.error||'Request failed');
+ return result;
+}
+
+function showLogin(){
+ $('login').classList.remove('hidden');
+ $('app').classList.add('hidden');
+}
+
+function showApp(){
+ $('login').classList.add('hidden');
+ $('app').classList.remove('hidden');
+}
+
+async function checkLogin(){
+ try{
+  const config=await api('/api/config');
+  $('hotelTitle').textContent=config.hotelName||'Hotel Order System';
+  if(config.loggedIn){showApp();await loadData();}
+  else showLogin();
+ }catch(e){
+  $('loginMessage').textContent='Server error: '+e.message;
+ }
+}
+
+$('loginForm').addEventListener('submit',async e=>{
+ e.preventDefault();
+ $('loginMessage').textContent='Logging in...';
+ try{
+  await api('/api/login',{method:'POST',body:JSON.stringify({password:$('password').value})});
+  $('password').value='';
+  $('loginMessage').textContent='';
+  showApp();
+  await loadData();
+ }catch(err){$('loginMessage').textContent=err.message;}
+});
+
+async function loadData(){
+ try{
+  data=await api('/api/data');
+  renderTables();
+  renderMenu();
+  renderOrders();
+  renderTableManagement();
+  renderMenuManagement();
+ }catch(e){
+  if(e.message.includes('log in'))showLogin();
+  else alert(e.message);
+ }
+}
+
+function renderTables(){
+ $('tableSelect').innerHTML=data.tables.filter(t=>t.active)
+ .map(t=>`<option value="${t.id}">${escapeHtml(t.name)}</option>`).join('');
+}
+
+function renderMenu(){
+ $('menuList').innerHTML=data.menu.filter(m=>m.active).map(m=>`
+ <div class="item">
+ <div><strong>${escapeHtml(m.name)}</strong><br><span class="muted">${escapeHtml(m.category||'Other')} · ₹${m.price}</span></div>
+ <button onclick="addItem(${m.id})">Add</button>
+ <span id="qty-${m.id}">${cart[m.id]||0}</span>
+ </div>`).join('');
+ updateTotal();
+}
+
+function addItem(id){
+ cart[id]=(cart[id]||0)+1;
+ renderMenu();
+}
+
+function updateTotal(){
+ const total=data.menu.reduce((sum,m)=>sum+(cart[m.id]||0)*Number(m.price),0);
+ $('total').textContent=total;
+}
+
+$('placeOrder').onclick=async()=>{
+ const items=Object.entries(cart).filter(([id,qty])=>qty>0)
+ .map(([menuId,qty])=>({menuId:Number(menuId),qty}));
+ if(!items.length){$('message').textContent='Please add an item.';return;}
+ try{
+  const result=await api('/api/orders',{method:'POST',body:JSON.stringify({
+   tableId:$('tableSelect').value,items,
+   note:$('note').value,customerName:$('customer').value
+  })});
+  $('message').textContent='Order #'+result.order.id+' created!';
+  cart={};$('note').value='';$('customer').value='';
+  await loadData();
+ }catch(e){$('message').textContent=e.message;}
+};
+
+function renderOrders(){
+ $('orders').innerHTML=data.orders.map(o=>`
+ <div class="card">
+ <strong>Order #${o.id} — ${escapeHtml(o.tableName)}</strong>
+ <p>${new Date(o.createdAt).toLocaleString()}</p>
+ <p>${o.items.map(i=>escapeHtml(i.name)+' × '+i.qty+' = ₹'+i.price*i.qty).join('<br>')}</p>
+ <p><strong>Total: ₹${o.total}</strong></p>
+ <p>Status: ${escapeHtml(o.status)} · ${o.paid?'Paid':'Unpaid'}</p>
+ <div class="row no-print">
+ <select id="status-${o.id}">
+ ${['New','Preparing','Ready','Served','Cancelled'].map(s=>`<option ${o.status===s?'selected':''}>${s}</option>`).join('')}
+ </select>
+ <button onclick="updateOrder(${o.id})">Update Status</button>
+ <button class="secondary" onclick="togglePaid(${o.id},${!o.paid})">${o.paid?'Mark Unpaid':'Mark Paid'}</button>
+ <button onclick="printBill(${o.id})">Print Bill</button>
+ </div></div>`).join('')||'<p>No orders yet.</p>';
+}
+
+async function updateOrder(id){
+ try{
+  await api('/api/orders/'+id,{method:'PATCH',body:JSON.stringify({status:$('status-'+id).value})});
+  await loadData();
+ }catch(e){alert(e.message);}
+}
+
+async function togglePaid(id,paid){
+ try{
+  await api('/api/orders/'+id,{method:'PATCH',body:JSON.stringify({paid})});
+  await loadData();
+ }catch(e){alert(e.message);}
+}
+
+function printBill(id){
+ const o=data.orders.find(x=>x.id===id);
+ if(!o)return;
+ $('printArea').style.display='block';
+ $('printArea').innerHTML=`
+ <div style="font-family:Arial;max-width:350px;margin:auto">
+ <h2 style="text-align:center">${escapeHtml($('hotelTitle').textContent)}</h2>
+ <p>Order #${o.id}<br>Table: ${escapeHtml(o.tableName)}<br>${new Date(o.createdAt).toLocaleString()}</p>
+ <hr>
+ ${o.items.map(i=>`<p>${escapeHtml(i.name)} × ${i.qty}<span style="float:right">₹${i.price*i.qty}</span></p>`).join('')}
+ <hr><h3>Total: ₹${o.total}</h3>
+ <p>Payment: ${o.paid?'Paid':'Unpaid'}</p>
+ <p style="text-align:center">Thank you!</p></div>`;
+ window.print();
+ $('printArea').style.display='none';
+}
+
+function renderTableManagement(){
+ $('tableManagement').innerHTML=data.tables.map(t=>`
+ <div class="item"><span>${escapeHtml(t.name)} ${t.active?'':'(Inactive)'}</span>
+ <button class="secondary" onclick="renameTable(${t.id})">Rename</button>
+ <button onclick="toggleTable(${t.id},${!t.active})">${t.active?'Deactivate':'Activate'}</button></div>`).join('');
+}
+
+async function renameTable(id){
+ const t=data.tables.find(x=>x.id===id);
+ const name=prompt('Table name:',t.name);
+ if(name===null||!name.trim())return;
+ try{await api('/api/tables/'+id,{method:'PATCH',body:JSON.stringify({name})});await loadData();}
+ catch(e){alert(e.message);}
+}
+
+async function toggleTable(id,active){
+ try{await api('/api/tables/'+id,{method:'PATCH',body:JSON.stringify({active})});await loadData();}
+ catch(e){alert(e.message);}
+}
+
+$('addMenu').onclick=async()=>{
+ try{
+  await api('/api/menu',{method:'POST',body:JSON.stringify({
+   name:$('newName').value,price:$('newPrice').value,category:$('newCategory').value||'Other'
+  })});
+  $('newName').value='';$('newPrice').value='';$('newCategory').value='';
+  await loadData();
+ }catch(e){alert(e.message);}
+};
+
+function renderMenuManagement(){
+ $('menuManagement').innerHTML=data.menu.map(m=>`
+ <div class="item"><span>${escapeHtml(m.name)} — ₹${m.price} ${m.active?'':'(Inactive)'}</span>
+ <button class="secondary" onclick="editMenu(${m.id})">Edit</button>
+ <button onclick="toggleMenu(${m.id},${!m.active})">${m.active?'Disable':'Enable'}</button></div>`).join('');
+}
+
+async function editMenu(id){
+ const m=data.menu.find(x=>x.id===id);
+ const name=prompt('Item name:',m.name);
+ if(name===null)return;
+ const price=prompt('Price:',m.price);
+ if(price===null)return;
+ try{
+  await api('/api/menu/'+id,{method:'PATCH',body:JSON.stringify({name,price:Number(price)})});
+  await loadData();
+ }catch(e){alert(e.message);}
+}
+
+async function toggleMenu(id,active){
+ try{await api('/api/menu/'+id,{method:'PATCH',body:JSON.stringify({active})});await loadData();}
+ catch(e){alert(e.message);}
+}
+
+function escapeHtml(s){
+ return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+$('refresh').onclick=loadData;
+checkLogin();
+</script>
+</body>
+</html>
